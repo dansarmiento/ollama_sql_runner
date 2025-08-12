@@ -16,7 +16,11 @@ def get_conn():
 def run_select(sql: str) -> Tuple[pd.DataFrame, bytes]:
     """Execute a SELECT and return (DataFrame, CSV-bytes)."""
     with get_conn() as conn:
-        df = pd.read_sql_query(sql, conn)
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()
+            cols = [desc[0] for desc in cur.description]
+    df = pd.DataFrame(rows, columns=cols)
     buf = io.StringIO()
     df.to_csv(buf, index=False)
     return df, buf.getvalue().encode("utf-8")
