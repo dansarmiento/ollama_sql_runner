@@ -1,80 +1,90 @@
 # Data-LLM (Ollama SQL Interface)
 
-## Security Notice
-This application interacts with an Ollama server, which may be vulnerable to multiple attacks if not updated.
-- **CVE-2024-39722 (File Disclosure):** Affects versions before 0.1.46.
-- **CVE-2024-39719 (File Disclosure):** Affects versions before 0.1.46.
-- **CVE-2024-37032 (Path Traversal):** Affects versions before 0.1.34.
-- **CVE-2024-45436 (Zip Extraction):** Affects versions before 0.1.47.
+Data-LLM is a Streamlit application that uses a large language model (LLM) to translate natural language questions into SQL queries for a PostgreSQL database. It's designed to be a simple, read-only interface for data exploration.
 
-**It is strongly recommended to update your Ollama server to version 0.1.47 or later.**
+## Security First
 
-This application will check the Ollama server version on startup and refuse to run if the version is older than 0.1.46. Updating the Ollama server is the only way to fully resolve the underlying issues.
+**IMPORTANT**: This application interacts with an Ollama server, which has had several security vulnerabilities in versions prior to `0.1.47`. Before you begin, ensure your Ollama server is updated to the latest version to mitigate risks such as:
 
-## Prereqs
-- Python 3.10+
-- PostgreSQL reachable from this machine
-- Ollama installed and running locally
-  - https://ollama.com/download
-  - Start the server, then pull a model:
-    - `ollama pull llama3.2:latest`
+- **CVE-2024-39722, CVE-2024-39719**: File Disclosure
+- **CVE-2024-37032**: Path Traversal
+- **CVE-2024-45436**: Zip Extraction
 
-## Setup
-```bash
-git clone <your_repo_or_local_folder_prepared>
-cd data-llm
-python -m venv .venv
-. .venv/bin/activate  # Windows: .\.venv\Scripts\activate
-pip install -r requirements.txt
-cp .env.example .env
-# edit .env with your DB credentials and preferred model
-```
-Run
+This application includes a startup check and will refuse to run if it detects an Ollama version older than `0.1.46`. **Updating your Ollama server is the only way to fully resolve these vulnerabilities.**
+
+For enhanced security, it is also highly recommended to:
+- Use the `ALLOWED_OLLAMA_MODELS` environment variable to restrict which models can be used.
+- Run the Ollama server in a trusted, isolated environment.
+- Never expose the Ollama API or this application to the public internet without proper authentication and security measures.
+
+## Prerequisites
+
+Before you install Data-LLM, make sure you have the following installed and configured:
+
+- **Python 3.10+**
+- **PostgreSQL**: A running instance that is network-accessible from where you'll run this application.
+- **Ollama**: Installed and running locally or on a trusted server.
+  - Download from [ollama.com/download](https://ollama.com/download).
+  - After installation, pull a model to get started:
+    ```bash
+    ollama pull llama3.2:latest
+    ```
+
+## Installation
+
+1.  **Clone the repository:**
+    ```bash
+    git clone <your_repo_or_local_folder_prepared>
+    cd data-llm
+    ```
+
+2.  **Create and activate a virtual environment:**
+    ```bash
+    python -m venv .venv
+    # On macOS/Linux
+    source .venv/bin/activate
+    # On Windows
+    .venv\Scripts\activate
+    ```
+
+3.  **Install the required dependencies:**
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+## Configuration
+
+Configuration is managed via environment variables. You can set them directly in your shell or use a `.env` file for convenience.
+
+1.  **Create a `.env` file:**
+    Copy the provided example file to create your own configuration file.
+    ```bash
+    cp .env.example .env
+    ```
+
+2.  **Edit the `.env` file:**
+    Open the `.env` file in a text editor and fill in the values for your environment. Refer to the comments in the `.env.example` file for a detailed explanation of each variable.
+
+    Key variables to configure:
+    - `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`: Your PostgreSQL connection details.
+    - `OLLAMA_BASE_URL`: The URL for your Ollama server.
+    - `OLLAMA_MODEL`: The Ollama model you want to use (e.g., `llama3.2:latest`).
+    - `ALLOWED_OLLAMA_MODELS`: A comma-separated list of trusted models to enhance security.
+
+## Running the Application
+
+Once you have configured your `.env` file, you can start the Streamlit application:
+
 ```bash
 streamlit run app.py
 ```
 
-Notes
-The app only executes read-only SQL. It blocks INSERT/UPDATE/DELETE/ALTER/DROP/CREATE and multi-statement queries.
+The application will be available at the local URL provided by Streamlit (usually `http://localhost:8501`).
 
-If the SQL lacks a LIMIT, the app enforces DEFAULT_ROW_LIMIT from .env.
+## Features
 
-The LLM gets a compact schema summary to improve SQL generation.
-
-
----
-
-# prompts.py
-```python
-SYSTEM_INSTRUCTIONS = """You are a precise SQL copilot. You write correct, minimal SQL for PostgreSQL only.
-You must:
-- Use only tables and columns that exist in the provided schema.
-- Prefer explicit column lists, avoid SELECT * when possible.
-- Return **JSON only**, no prose.
-
-Return one of these JSON shapes:
-
-If you need clarification:
-{
-  "needs_clarification": true,
-  "question": "one short clarifying question",
-  "reason": "why you need it"
-}
-
-If you have enough info to propose SQL:
-{
-  "needs_clarification": false,
-  "sql": "SELECT ...",
-  "explanation": "short one-line reason",
-  "assumptions": ["list of assumptions you made, if any"]
-}
-"""
-
-ANALYZE_TEMPLATE = """User request:
-{user_request}
-
-Schema (PostgreSQL):
-{schema_text}
-
-If unclear, ask exactly one best clarifying question. Otherwise produce SQL.
-Respond with valid JSON only."""
+- **Natural Language to SQL**: Ask for data in plain English and get SQL queries in return.
+- **Read-Only Protection**: The application is designed to only execute `SELECT` statements. It blocks `INSERT`, `UPDATE`, `DELETE`, and other write operations.
+- **Automatic LIMIT Enforcement**: If a generated query doesn't have a `LIMIT`, the application automatically adds one based on `DEFAULT_ROW_LIMIT` to prevent overly large results.
+- **Schema Awareness**: The LLM is provided with a summarized version of your database schema to improve the accuracy of the generated SQL.
+- **Security Measures**: Includes checks for outdated Ollama versions, restrictions on allowed models, and validation of configuration inputs.
