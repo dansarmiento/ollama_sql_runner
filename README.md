@@ -1,13 +1,15 @@
 # Data-LLM (Ollama SQL Interface)
 
 ## Security Notice
-This application interacts with an Ollama server, which may be vulnerable to Remote Code Execution (RCE) attacks if not updated.
+This application interacts with an Ollama server, which may be vulnerable to multiple attacks if not updated.
+- **CVE-2024-39722 (File Disclosure):** Affects versions before 0.1.46.
+- **CVE-2024-39719 (File Disclosure):** Affects versions before 0.1.46.
 - **CVE-2024-37032 (Path Traversal):** Affects versions before 0.1.34.
 - **CVE-2024-45436 (Zip Extraction):** Affects versions before 0.1.47.
 
 **It is strongly recommended to update your Ollama server to version 0.1.47 or later.**
 
-This application includes mitigations to prevent these vulnerabilities from being exploited through this interface, but updating the Ollama server is the only way to fully resolve the underlying issues.
+This application will check the Ollama server version on startup and refuse to run if the version is older than 0.1.46. Updating the Ollama server is the only way to fully resolve the underlying issues.
 
 ## Prereqs
 - Python 3.10+

@@ -4,6 +4,7 @@ import requests
 import re
 from typing import Dict, Any
 from urllib.parse import urlparse
+from packaging import version
 from prompts import SYSTEM_INSTRUCTIONS, ANALYZE_TEMPLATE
 
 # --- Security Mitigations ---
@@ -11,6 +12,35 @@ from prompts import SYSTEM_INSTRUCTIONS, ANALYZE_TEMPLATE
 # It is strongly recommended to update the Ollama server to version 0.1.47 or later.
 
 OLLAMA_BASE = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+MIN_OLLAMA_VERSION = "0.1.46"
+
+def check_ollama_version():
+    """Checks if the Ollama server version is sufficient."""
+    try:
+        resp = requests.get(f"{OLLAMA_BASE}/api/version", timeout=5)
+        resp.raise_for_status()
+        server_version_str = resp.json().get("version")
+        if not server_version_str:
+            raise ValueError("Could not determine Ollama server version from response.")
+
+        server_version = version.parse(server_version_str)
+        required_version = version.parse(MIN_OLLAMA_VERSION)
+
+        if server_version < required_version:
+            raise RuntimeError(
+                f"Your Ollama server version ({server_version}) is outdated. "
+                f"Please upgrade to version {MIN_OLLAMA_VERSION} or later to mitigate "
+                f"known vulnerabilities (CVE-2024-39722, CVE-2024-39719)."
+            )
+    except requests.RequestException as e:
+        raise RuntimeError(
+            "Could not connect to Ollama server to verify its version. "
+            "Please ensure the Ollama server is running and accessible."
+        ) from e
+    except ValueError as e:
+        raise RuntimeError(f"Error checking Ollama version: {e}") from e
+
+check_ollama_version()
 MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:latest")
 
 # Validate OLLAMA_BASE_URL to prevent SSRF-like attacks
