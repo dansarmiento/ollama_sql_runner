@@ -6,7 +6,14 @@ import time
 from typing import Dict, Any
 from urllib.parse import urlparse
 from packaging import version
+
 from prompts import SYSTEM_INSTRUCTIONS, ANALYZE_TEMPLATE
+from exceptions import (
+    OllamaConnectionError,
+    OllamaVersionError,
+    OllamaRequestError,
+    LLMResponseError,
+)
 
 # --- Security Mitigations ---
 # This application requires an updated Ollama server to protect against several
@@ -31,24 +38,26 @@ def check_ollama_version():
         data = _make_ollama_request("GET", "/api/version", timeout=5)
         server_version_str = data.get("version")
         if not server_version_str:
-            raise ValueError("Could not determine Ollama server version from response.")
+            raise OllamaVersionError("Could not determine Ollama server version from response.")
 
         server_version = version.parse(server_version_str)
         required_version = version.parse(MIN_OLLAMA_VERSION)
 
         if server_version < required_version:
-            raise RuntimeError(
+            raise OllamaVersionError(
                 f"Your Ollama server version ({server_version}) is outdated. "
                 f"Please upgrade to version {MIN_OLLAMA_VERSION} or later to mitigate "
                 f"known vulnerabilities (e.g., CVE-2024-39721, CVE-2024-39720)."
             )
-    except requests.RequestException as e:
-        raise RuntimeError(
+    except OllamaRequestError as e:
+        # Re-raise connection errors from the version check as a more specific type
+        raise OllamaConnectionError(
             "Could not connect to Ollama server to verify its version. "
             "Please ensure the Ollama server is running and accessible."
         ) from e
-    except ValueError as e:
-        raise RuntimeError(f"Error checking Ollama version: {e}") from e
+    except (ValueError, OllamaVersionError) as e:
+        # Re-raise other version-check errors
+        raise OllamaVersionError(f"Error checking Ollama version: {e}") from e
 
 check_ollama_version()
 MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:latest")
@@ -109,24 +118,28 @@ def _make_ollama_request(method: str, endpoint: str, **kwargs):
         dt = time.time() - t0
         print(f"Ollama request to {endpoint} took {dt:.2f}s (timeout={kwargs.get('timeout')}s)")
         return resp.json()
-    except requests.exceptions.Timeout:
+    except requests.exceptions.Timeout as e:
         dt = time.time() - t0
         print(f"Ollama request to {endpoint} timed out after {dt:.2f}s (timeout={kwargs.get('timeout')}s)")
-        raise
-    except Exception:
+        raise OllamaRequestError(f"Request to Ollama timed out: {e}") from e
+    except requests.exceptions.RequestException as e:
         dt = time.time() - t0
         print(f"Ollama request to {endpoint} failed after {dt:.2f}s (timeout={kwargs.get('timeout')}s)")
-        raise
+        raise OllamaRequestError(f"Request to Ollama failed: {e}") from e
 
 
 def _chat(messages):
-    data = _make_ollama_request(
-        "POST",
-        "/api/chat",
-        json={"model": MODEL, "messages": messages, "stream": False},
-    )
-    # Ollama returns a final message at data["message"]["content"]
-    return data["message"]["content"]
+    try:
+        data = _make_ollama_request(
+            "POST",
+            "/api/chat",
+            json={"model": MODEL, "messages": messages, "stream": False},
+        )
+        # Ollama returns a final message at data["message"]["content"]
+        return data["message"]["content"]
+    except (KeyError, IndexError) as e:
+        raise LLMResponseError(f"Received an unexpected response structure from Ollama: {e}") from e
+
 
 def analyze_request(user_request: str, schema_text: str) -> Dict[str, Any]:
     content = ANALYZE_TEMPLATE.format(user_request=user_request, schema_text=schema_text)
@@ -138,10 +151,13 @@ def analyze_request(user_request: str, schema_text: str) -> Dict[str, Any]:
     # Try to extract JSON
     try:
         return json.loads(raw)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
         # Attempt to find JSON block
         start = raw.find("{")
         end = raw.rfind("}")
         if start != -1 and end != -1 and end > start:
-            return json.loads(raw[start:end+1])
-        raise
+            try:
+                return json.loads(raw[start:end+1])
+            except json.JSONDecodeError:
+                pass # Fall through to raise
+        raise LLMResponseError(f"The LLM returned a response that could not be parsed as JSON. Raw response:\n{raw}") from e
