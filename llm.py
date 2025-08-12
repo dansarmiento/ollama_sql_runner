@@ -26,9 +26,8 @@ MIN_OLLAMA_VERSION = "0.1.46"
 def check_ollama_version():
     """Checks if the Ollama server version is sufficient."""
     try:
-        resp = requests.get(f"{OLLAMA_BASE}/api/version", timeout=5)
-        resp.raise_for_status()
-        server_version_str = resp.json().get("version")
+        data = _make_ollama_request("GET", "/api/version", timeout=5)
+        server_version_str = data.get("version")
         if not server_version_str:
             raise ValueError("Could not determine Ollama server version from response.")
 
@@ -63,11 +62,50 @@ if not parsed_url.hostname or re.match(r"^[a-zA-Z0-9.-]+$", parsed_url.hostname)
 if ".." in MODEL or "/" in MODEL:
     raise ValueError("Invalid characters in OLLAMA_MODEL. Path traversal is not allowed.")
 
-def _chat(messages):
-    url = f"{OLLAMA_BASE}/api/chat"
-    resp = requests.post(url, json={"model": MODEL, "messages": messages, "stream": False}, timeout=120)
+# --- Model Allowlist ---
+# To prevent loading of untrusted models, we can restrict which models the
+# application is allowed to use. If the ALLOWED_OLLAMA_MODELS environment
+# variable is set, we enforce that the requested model is in the list.
+ALLOWED_MODELS_STR = os.getenv("ALLOWED_OLLAMA_MODELS")
+if ALLOWED_MODELS_STR:
+    allowed_models = [m.strip() for m in ALLOWED_MODELS_STR.split(",")]
+    # The model name can be e.g., "llama3.2:latest". We check the base name.
+    base_model_name = MODEL.split(":")[0]
+    if base_model_name not in allowed_models:
+        raise ValueError(
+            f"Model '{MODEL}' is not in the list of allowed models. "
+            f"Allowed models are: {', '.join(allowed_models)}"
+        )
+
+# --- Centralized Request Function with Endpoint Guardrails ---
+# To prevent model exfiltration or other unauthorized actions, all requests to the
+# Ollama server must go through this centralized function, which enforces that
+# only safe, allowed endpoints and methods are used.
+BLOCKED_OLLAMA_ENDPOINTS = ["push", "create", "delete", "copy", "blobs"]
+ALLOWED_OLLAMA_METHODS = ["GET", "POST"]
+
+def _make_ollama_request(method: str, endpoint: str, **kwargs):
+    """A centralized and guarded function for making requests to Ollama."""
+    if method.upper() not in ALLOWED_OLLAMA_METHODS:
+        raise PermissionError(f"HTTP method '{method}' is not allowed.")
+
+    # Prevent access to any sensitive or dangerous endpoints
+    for blocked in BLOCKED_OLLAMA_ENDPOINTS:
+        if f"/api/{blocked}" in endpoint:
+            raise PermissionError(f"Access to the Ollama endpoint '{endpoint}' is forbidden.")
+
+    url = f"{OLLAMA_BASE}{endpoint}"
+    resp = requests.request(method, url, **kwargs)
     resp.raise_for_status()
-    data = resp.json()
+    return resp.json()
+
+def _chat(messages):
+    data = _make_ollama_request(
+        "POST",
+        "/api/chat",
+        json={"model": MODEL, "messages": messages, "stream": False},
+        timeout=120,
+    )
     # Ollama returns a final message at data["message"]["content"]
     return data["message"]["content"]
 
