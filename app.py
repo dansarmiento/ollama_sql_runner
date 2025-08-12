@@ -1,5 +1,6 @@
 import os
 import time
+import logging
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
@@ -8,15 +9,24 @@ from schema_cache import summarize_schema
 from llm import analyze_request, check_ollama_version
 from sql_exec import run_select
 from guardrails import is_safe_select, enforce_limit
+from exceptions import (
+    OllamaConnectionError,
+    OllamaVersionError,
+    LLMResponseError,
+    DatabaseQueryError,
+)
 
+# --- Setup ---
 load_dotenv()
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 st.set_page_config(page_title="Data-LLM", page_icon="🧠", layout="wide")
 
 try:
     check_ollama_version()
-except RuntimeError as e:
-    st.error(f"**Failed to start:** {e}")
+except (OllamaConnectionError, OllamaVersionError) as e:
+    logging.error(f"Ollama pre-flight check failed: {e}", exc_info=True)
+    st.error(f"**Failed to start: Cannot connect to Ollama.**\n\n{e}\n\nPlease ensure the Ollama server is running and accessible.", icon="💔")
     st.stop()
 
 # --- Rate Limiting ---
@@ -95,16 +105,23 @@ if go_btn and user_request.strip():
     else:
         record_request()
         st.session_state["pending_request"] = user_request.strip()
-        with st.spinner("Thinking with Ollama..."):
-            result = analyze_request(st.session_state["pending_request"], schema_text)
-        if result.get("needs_clarification"):
-            st.session_state["clarification_needed"] = True
-            st.session_state["clarifying_question"] = result.get("question", "")
-            st.session_state["conversation_notes"].append({"role": "assistant", "question": st.session_state["clarifying_question"]})
-        else:
-            st.session_state["clarification_needed"] = False
-            st.session_state["clarifying_question"] = ""
-            st.session_state["conversation_notes"].append({"role": "assistant", "sql": result.get("sql",""), "explanation": result.get("explanation",""), "assumptions": result.get("assumptions", [])})
+        try:
+            with st.spinner("Thinking with Ollama..."):
+                result = analyze_request(st.session_state["pending_request"], schema_text)
+            if result.get("needs_clarification"):
+                st.session_state["clarification_needed"] = True
+                st.session_state["clarifying_question"] = result.get("question", "")
+                st.session_state["conversation_notes"].append({"role": "assistant", "question": st.session_state["clarifying_question"]})
+            else:
+                st.session_state["clarification_needed"] = False
+                st.session_state["clarifying_question"] = ""
+                st.session_state["conversation_notes"].append({"role": "assistant", "sql": result.get("sql",""), "explanation": result.get("explanation",""), "assumptions": result.get("assumptions", [])})
+        except LLMResponseError as e:
+            logging.error(f"Error analyzing request: {e}", exc_info=True)
+            st.error("The AI failed to process the request. Please try rephrasing your question.", icon="🤯")
+        except OllamaRequestError as e:
+            logging.error(f"Error analyzing request: {e}", exc_info=True)
+            st.error("There was a problem communicating with the AI. Please try again later.", icon="🤯")
         st.experimental_rerun()
 
 if st.session_state["clarification_needed"]:
@@ -121,6 +138,7 @@ if st.session_state["clarification_needed"]:
             record_request()
             # Merge clarification into the original request
             merged = f"{st.session_state['pending_request']}\n\nUser clarification: {clarify.strip()}"
+        try:
             with st.spinner("Updating with clarification..."):
                 result = analyze_request(merged, schema_text)
             st.session_state["conversation_notes"].append({"role": "user", "answer": clarify.strip()})
@@ -131,6 +149,12 @@ if st.session_state["clarification_needed"]:
                 st.session_state["clarification_needed"] = False
                 st.session_state["clarifying_question"] = ""
                 st.session_state["conversation_notes"].append({"role": "assistant", "sql": result.get("sql",""), "explanation": result.get("explanation",""), "assumptions": result.get("assumptions", [])})
+        except LLMResponseError as e:
+            logging.error(f"Error analyzing request: {e}", exc_info=True)
+            st.error("The AI failed to process the request. Please try rephrasing your question.", icon="🤯")
+        except OllamaRequestError as e:
+            logging.error(f"Error analyzing request: {e}", exc_info=True)
+            st.error("There was a problem communicating with the AI. Please try again later.", icon="🤯")
             st.experimental_rerun()
 
 # Show the latest proposed SQL (if any)
@@ -176,8 +200,9 @@ if latest_sql:
                         file_name="result.csv",
                         mime="text/csv"
                     )
-                except Exception as e:
-                    st.error(f"Execution failed: {e}")
+                except DatabaseQueryError as e:
+                    logging.error(f"Database query failed: {e}", exc_info=True)
+                    st.error(f"**Error executing query:**\n\n{e}", icon="🔥")
 
 # Developer pane
 with st.expander("Schema summary (what the LLM sees)"):
