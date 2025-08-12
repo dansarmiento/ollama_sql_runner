@@ -5,13 +5,41 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from schema_cache import summarize_schema
-from llm import analyze_request
+from llm import analyze_request, check_ollama_version
 from sql_exec import run_select
 from guardrails import is_safe_select, enforce_limit
 
 load_dotenv()
 
 st.set_page_config(page_title="Data-LLM", page_icon="🧠", layout="wide")
+
+try:
+    check_ollama_version()
+except RuntimeError as e:
+    st.error(f"**Failed to start:** {e}")
+    st.stop()
+
+# --- Rate Limiting ---
+# Simple in-memory rate limiting to prevent abuse
+RATE_LIMIT_PER_MINUTE = os.getenv("RATE_LIMIT_PER_MINUTE", 15)
+if "request_timestamps" not in st.session_state:
+    st.session_state["request_timestamps"] = []
+
+def is_rate_limited():
+    """Checks if the user has exceeded the rate limit."""
+    now = time.time()
+    # Prune timestamps older than 60 seconds
+    st.session_state.request_timestamps = [
+        ts for ts in st.session_state.request_timestamps if now - ts < 60
+    ]
+    if len(st.session_state.request_timestamps) >= RATE_LIMIT_PER_MINUTE:
+        return True
+    return False
+
+def record_request():
+    """Adds a timestamp for the current request."""
+    st.session_state.request_timestamps.append(time.time())
+
 st.title("Data-LLM • Natural Language → PostgreSQL")
 st.caption("Powered by Ollama and PostgreSQL")
 
@@ -62,18 +90,22 @@ if clear_btn:
 schema_text = get_schema_text()
 
 if go_btn and user_request.strip():
-    st.session_state["pending_request"] = user_request.strip()
-    with st.spinner("Thinking with Ollama..."):
-        result = analyze_request(st.session_state["pending_request"], schema_text)
-    if result.get("needs_clarification"):
-        st.session_state["clarification_needed"] = True
-        st.session_state["clarifying_question"] = result.get("question", "")
-        st.session_state["conversation_notes"].append({"role": "assistant", "question": st.session_state["clarifying_question"]})
+    if is_rate_limited():
+        st.error(f"Rate limit exceeded. Please try again in a minute.")
     else:
-        st.session_state["clarification_needed"] = False
-        st.session_state["clarifying_question"] = ""
-        st.session_state["conversation_notes"].append({"role": "assistant", "sql": result.get("sql",""), "explanation": result.get("explanation",""), "assumptions": result.get("assumptions", [])})
-    st.experimental_rerun()
+        record_request()
+        st.session_state["pending_request"] = user_request.strip()
+        with st.spinner("Thinking with Ollama..."):
+            result = analyze_request(st.session_state["pending_request"], schema_text)
+        if result.get("needs_clarification"):
+            st.session_state["clarification_needed"] = True
+            st.session_state["clarifying_question"] = result.get("question", "")
+            st.session_state["conversation_notes"].append({"role": "assistant", "question": st.session_state["clarifying_question"]})
+        else:
+            st.session_state["clarification_needed"] = False
+            st.session_state["clarifying_question"] = ""
+            st.session_state["conversation_notes"].append({"role": "assistant", "sql": result.get("sql",""), "explanation": result.get("explanation",""), "assumptions": result.get("assumptions", [])})
+        st.experimental_rerun()
 
 if st.session_state["clarification_needed"]:
     st.info("Clarification needed")
@@ -83,19 +115,23 @@ if st.session_state["clarification_needed"]:
     with c1:
         submit_clarify = st.button("Submit clarification", use_container_width=True)
     if submit_clarify and clarify.strip():
-        # Merge clarification into the original request
-        merged = f"{st.session_state['pending_request']}\n\nUser clarification: {clarify.strip()}"
-        with st.spinner("Updating with clarification..."):
-            result = analyze_request(merged, schema_text)
-        st.session_state["conversation_notes"].append({"role": "user", "answer": clarify.strip()})
-        if result.get("needs_clarification"):
-            # Still unclear, replace question and ask again
-            st.session_state["clarifying_question"] = result.get("question", "")
+        if is_rate_limited():
+            st.error(f"Rate limit exceeded. Please try again in a minute.")
         else:
-            st.session_state["clarification_needed"] = False
-            st.session_state["clarifying_question"] = ""
-            st.session_state["conversation_notes"].append({"role": "assistant", "sql": result.get("sql",""), "explanation": result.get("explanation",""), "assumptions": result.get("assumptions", [])})
-        st.experimental_rerun()
+            record_request()
+            # Merge clarification into the original request
+            merged = f"{st.session_state['pending_request']}\n\nUser clarification: {clarify.strip()}"
+            with st.spinner("Updating with clarification..."):
+                result = analyze_request(merged, schema_text)
+            st.session_state["conversation_notes"].append({"role": "user", "answer": clarify.strip()})
+            if result.get("needs_clarification"):
+                # Still unclear, replace question and ask again
+                st.session_state["clarifying_question"] = result.get("question", "")
+            else:
+                st.session_state["clarification_needed"] = False
+                st.session_state["clarifying_question"] = ""
+                st.session_state["conversation_notes"].append({"role": "assistant", "sql": result.get("sql",""), "explanation": result.get("explanation",""), "assumptions": result.get("assumptions", [])})
+            st.experimental_rerun()
 
 # Show the latest proposed SQL (if any)
 latest_sql = None

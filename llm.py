@@ -8,7 +8,16 @@ from packaging import version
 from prompts import SYSTEM_INSTRUCTIONS, ANALYZE_TEMPLATE
 
 # --- Security Mitigations ---
-# These mitigations are for CVE-2024-37032 and CVE-2024-45436.
+# This application requires an updated Ollama server to protect against several
+# known vulnerabilities. The version check below is the primary mitigation.
+#
+# - CVE-2024-39721 (DoS): Fixed in 0.1.34
+# - CVE-2024-39720 (DoS): Fixed in 0.1.46
+# - CVE-2024-39722 (File Disclosure): Fixed in 0.1.46
+# - CVE-2024-39719 (File Disclosure): Fixed in 0.1.46
+# - CVE-2024-37032 (Path Traversal): Fixed in 0.1.34
+# - CVE-2024-45436 (Zip Extraction): Fixed in 0.1.47
+#
 # It is strongly recommended to update the Ollama server to version 0.1.47 or later.
 
 OLLAMA_BASE = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
@@ -30,7 +39,7 @@ def check_ollama_version():
             raise RuntimeError(
                 f"Your Ollama server version ({server_version}) is outdated. "
                 f"Please upgrade to version {MIN_OLLAMA_VERSION} or later to mitigate "
-                f"known vulnerabilities (CVE-2024-39722, CVE-2024-39719)."
+                f"known vulnerabilities (e.g., CVE-2024-39721, CVE-2024-39720)."
             )
     except requests.RequestException as e:
         raise RuntimeError(
