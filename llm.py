@@ -2,6 +2,7 @@ import os
 import json
 import requests
 import re
+import time
 from typing import Dict, Any
 from urllib.parse import urlparse
 from packaging import version
@@ -21,6 +22,7 @@ from prompts import SYSTEM_INSTRUCTIONS, ANALYZE_TEMPLATE
 # It is strongly recommended to update the Ollama server to version 0.1.47 or later.
 
 OLLAMA_BASE = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "60"))
 MIN_OLLAMA_VERSION = "0.1.46"
 
 def check_ollama_version():
@@ -95,16 +97,33 @@ def _make_ollama_request(method: str, endpoint: str, **kwargs):
             raise PermissionError(f"Access to the Ollama endpoint '{endpoint}' is forbidden.")
 
     url = f"{OLLAMA_BASE}{endpoint}"
-    resp = requests.request(method, url, **kwargs)
-    resp.raise_for_status()
-    return resp.json()
+
+    # Set default timeout if not provided. The timeout for the version check
+    # is intentionally short (5s) and should not be overridden by the default.
+    kwargs.setdefault("timeout", OLLAMA_TIMEOUT)
+
+    t0 = time.time()
+    try:
+        resp = requests.request(method, url, **kwargs)
+        resp.raise_for_status()
+        dt = time.time() - t0
+        print(f"Ollama request to {endpoint} took {dt:.2f}s (timeout={kwargs.get('timeout')}s)")
+        return resp.json()
+    except requests.exceptions.Timeout:
+        dt = time.time() - t0
+        print(f"Ollama request to {endpoint} timed out after {dt:.2f}s (timeout={kwargs.get('timeout')}s)")
+        raise
+    except Exception:
+        dt = time.time() - t0
+        print(f"Ollama request to {endpoint} failed after {dt:.2f}s (timeout={kwargs.get('timeout')}s)")
+        raise
+
 
 def _chat(messages):
     data = _make_ollama_request(
         "POST",
         "/api/chat",
         json={"model": MODEL, "messages": messages, "stream": False},
-        timeout=120,
     )
     # Ollama returns a final message at data["message"]["content"]
     return data["message"]["content"]
